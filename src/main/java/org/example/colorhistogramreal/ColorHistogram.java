@@ -22,7 +22,7 @@ public class ColorHistogram extends Application {
     public void start(Stage stage) {
         try {
             // Load the image
-            File imageFile = new File("/Users/connorv-e/Downloads/Screen Shot 2023-09-14 at 12.54.42 PM.jpg");
+            File imageFile = new File("/Users/connorv-e/Downloads/hard-techno-v-3.0-min/__ia_thumb.jpg");
             BufferedImage image = ImageIO.read(imageFile);
 
             // Initialize histograms for R, G, and B channels (256 bins each)
