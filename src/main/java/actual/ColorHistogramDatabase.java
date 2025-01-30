@@ -1,49 +1,46 @@
 package actual;
 
+import javax.imageio.ImageIO;
+import javax.imageio.ImageReader;
+import javax.imageio.stream.ImageInputStream;
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.IOException;
-import java.sql.Connection;
-import java.sql.DriverManager;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.SQLException;
-import java.sql.Statement;
+import java.sql.*;
 import java.util.Arrays;
-
-import javax.imageio.ImageIO;
-
+import java.util.Iterator;
 import com.google.gson.Gson;
 
 public class ColorHistogramDatabase {
 
     private static final String DB_URL = "jdbc:sqlite:ColorHistogram.db";
 
-    @SuppressWarnings("CallToPrintStackTrace")
     public static void main(String[] args) {
-        String imageDirectoryPath = "/Users/connorv-e/Desktop"; // Path to the directory with images
+        String imageDirectoryPath = "/Users/connorv-e/colorhistogramreal/card_images"; // Image folder path
 
         try (Connection connection = DriverManager.getConnection(DB_URL)) {
             createDatabaseTable(connection);
 
-            // Process images and store detailed histograms in the database
             File imageDirectory = new File(imageDirectoryPath);
             if (imageDirectory.isDirectory()) {
                 for (File file : imageDirectory.listFiles()) {
                     if (isImageFile(file)) {
                         System.out.println("Processing: " + file.getName());
-                        HistogramData histogramData = calculateColorHistogram(file);
-                        saveHistogramToDatabase(connection, file.getName(), histogramData);
+                        BufferedImage image = safeReadImage(file);
+                        if (image != null) {
+                            HistogramData histogramData = calculateColorHistogram(image);
+                            saveHistogramToDatabase(connection, file.getName(), histogramData);
+                        } else {
+                            System.err.println("Skipping unreadable image: " + file.getName());
+                        }
                     }
                 }
             } else {
                 System.err.println("Provided path is not a directory.");
             }
 
-            // Retrieve and print the stored histograms from the database
             fetchAndDisplayData(connection);
-
-        } catch (SQLException | IOException e) {
+        } catch (SQLException e) {
             e.printStackTrace();
         }
     }
@@ -65,13 +62,30 @@ public class ColorHistogramDatabase {
 
     private static boolean isImageFile(File file) {
         String[] supportedExtensions = { ".jpg", ".jpeg", ".png", ".bmp", ".gif" };
-        String fileName = file.getName().toLowerCase();
-        return Arrays.stream(supportedExtensions).anyMatch(fileName::endsWith);
+        return Arrays.stream(supportedExtensions).anyMatch(file.getName().toLowerCase()::endsWith);
     }
 
-    private static HistogramData calculateColorHistogram(File imageFile) throws IOException {
-        BufferedImage image = ImageIO.read(imageFile);
+    private static BufferedImage safeReadImage(File file) {
+        try (ImageInputStream input = ImageIO.createImageInputStream(file)) {
+            Iterator<ImageReader> readers = ImageIO.getImageReaders(input);
+            if (!readers.hasNext()) {
+                System.err.println("No ImageReader found for: " + file.getName());
+                return null;
+            }
 
+            ImageReader reader = readers.next();
+            reader.setInput(input);
+
+            BufferedImage image = reader.read(0);
+            reader.dispose(); // Cleanup
+            return image;
+        } catch (IOException e) {
+            System.err.println("Error reading image: " + file.getName() + " -> " + e.getMessage());
+            return null;
+        }
+    }
+
+    private static HistogramData calculateColorHistogram(BufferedImage image) {
         int[] redHistogram = new int[256];
         int[] greenHistogram = new int[256];
         int[] blueHistogram = new int[256];
@@ -82,17 +96,11 @@ public class ColorHistogramDatabase {
         for (int y = 0; y < height; y++) {
             for (int x = 0; x < width; x++) {
                 int pixel = image.getRGB(x, y);
-
-                int red = (pixel >> 16) & 0xff;
-                int green = (pixel >> 8) & 0xff;
-                int blue = pixel & 0xff;
-
-                redHistogram[red]++;
-                greenHistogram[green]++;
-                blueHistogram[blue]++;
+                redHistogram[(pixel >> 16) & 0xff]++;
+                greenHistogram[(pixel >> 8) & 0xff]++;
+                blueHistogram[pixel & 0xff]++;
             }
         }
-
         return new HistogramData(redHistogram, greenHistogram, blueHistogram);
     }
 
@@ -104,7 +112,7 @@ public class ColorHistogramDatabase {
         Gson gson = new Gson();
         try (PreparedStatement stmt = connection.prepareStatement(insertSQL)) {
             stmt.setString(1, fileName.replaceAll("\\.\\w+$", ""));
-            stmt.setString(2, gson.toJson(histogramData.redHistogram)); // Convert histogram to JSON
+            stmt.setString(2, gson.toJson(histogramData.redHistogram));
             stmt.setString(3, gson.toJson(histogramData.greenHistogram));
             stmt.setString(4, gson.toJson(histogramData.blueHistogram));
             stmt.executeUpdate();
@@ -116,21 +124,16 @@ public class ColorHistogramDatabase {
         try (PreparedStatement stmt = connection.prepareStatement(querySQL)) {
             ResultSet resultSet = stmt.executeQuery();
             while (resultSet.next()) {
-                String filename = resultSet.getString("filename");
-                String redHistogram = resultSet.getString("red_histogram");
-                String greenHistogram = resultSet.getString("green_histogram");
-                String blueHistogram = resultSet.getString("blue_histogram");
-
-                System.out.println("Filename: " + filename);
-                System.out.println("Red Histogram: " + redHistogram);
-                System.out.println("Green Histogram: " + greenHistogram);
-                System.out.println("Blue Histogram: " + blueHistogram);
+                System.out.println("Filename: " + resultSet.getString("filename"));
+                System.out.println("Red Histogram: " + resultSet.getString("red_histogram"));
+                System.out.println("Green Histogram: " + resultSet.getString("green_histogram"));
+                System.out.println("Blue Histogram: " + resultSet.getString("blue_histogram"));
                 System.out.println();
             }
         }
     }
 
-    // Data class to hold histogram arrays
+    // Class to hold histogram data
     private static class HistogramData {
         int[] redHistogram;
         int[] greenHistogram;

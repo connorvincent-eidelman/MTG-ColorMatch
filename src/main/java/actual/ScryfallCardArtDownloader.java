@@ -10,6 +10,8 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
@@ -17,107 +19,146 @@ import com.google.gson.JsonParser;
 
 public class ScryfallCardArtDownloader {
 
-    private static final String API_URL = "https://api.scryfall.com/cards/search?q=set%3Aall";
+    private static final String API_URL = "https://api.scryfall.com/cards/search?q=new%3Aart+include%3Aextras&order=name&as=grid&unique=prints";
     private static final String IMAGE_DIR = "card_images/";
+    private static final int THREAD_POOL_SIZE = 10; // For concurrent downloads
+    private static final int MAX_RETRIES = 5;
 
     public static void main(String[] args) {
         try {
-            // Create the image directory if it doesn't exist
             File dir = new File(IMAGE_DIR);
             if (!dir.exists()) {
                 dir.mkdirs();
             }
 
-            // Track downloaded images to avoid duplicates
             Set<String> downloadedImages = new HashSet<>();
+            ExecutorService executor = Executors.newFixedThreadPool(THREAD_POOL_SIZE);
 
-            // Start with the first page of results
-            String apiUrl = API_URL;
+            String apiUrl = API_URL; // Start from the first page of cards
+            int pageCount = 0;
+
             while (apiUrl != null) {
-                // Send the GET request to the API
+                pageCount++;
+                System.out.println("Fetching page: " + pageCount);
+
                 String response = sendGetRequest(apiUrl);
-
-                // Parse the JSON response
                 JsonObject jsonResponse = JsonParser.parseString(response).getAsJsonObject();
-
-                // Extract the card data
                 JsonArray cards = jsonResponse.getAsJsonArray("data");
 
                 for (int i = 0; i < cards.size(); i++) {
                     JsonObject card = cards.get(i).getAsJsonObject();
 
-                    // Get card image URL (card face image)
-                    JsonObject imageUris = card.getAsJsonObject("image_uris");
-                    if (imageUris != null) {
-                        String imageUrl = imageUris.get("normal").getAsString();
+                    // Check for single-faced card images
+                    if (card.has("image_uris")) {
+                        String imageUrl = card.getAsJsonObject("image_uris").get("art_crop").getAsString();
+                        submitDownloadTask(executor, downloadedImages, imageUrl);
+                    }
 
-                        // Only download unique images
-                        if (!downloadedImages.contains(imageUrl)) {
-                            downloadedImages.add(imageUrl);
-                            downloadImage(imageUrl);
+                    // Check for double-faced card images
+                    if (card.has("card_faces")) {
+                        JsonArray faces = card.getAsJsonArray("card_faces");
+                        for (int j = 0; j < faces.size(); j++) {
+                            JsonObject face = faces.get(j).getAsJsonObject();
+                            if (face.has("image_uris")) {
+                                String faceImageUrl = face.getAsJsonObject("image_uris").get("art_crop").getAsString();
+                                submitDownloadTask(executor, downloadedImages, faceImageUrl);
+                            }
                         }
                     }
                 }
 
-                // Check if there's a next page
+                // Get the next page URL from the API response
                 apiUrl = jsonResponse.has("next_page") ? jsonResponse.get("next_page").getAsString() : null;
             }
+
+            // Wait for all tasks to complete before shutting down
+            executor.shutdown();
+            while (!executor.isTerminated()) {
+                Thread.sleep(1000); // Check every second if all tasks are finished
+            }
+
+            System.out.println("Download complete!");
+
         } catch (Exception e) {
             e.printStackTrace();
         }
     }
 
-    // Method to send a GET request to the Scryfall API
     private static String sendGetRequest(String urlString) throws IOException {
-        URL url = new URL(urlString);
-        HttpURLConnection connection = (HttpURLConnection) url.openConnection();
-        connection.setRequestMethod("GET");
-        connection.setConnectTimeout(5000);
-        connection.setReadTimeout(5000);
+        int attempts = 0;
+        while (attempts < MAX_RETRIES) {
+            try {
+                System.out.println("Sending request to: " + urlString);
+                URL url = new URL(urlString);
+                HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+                connection.setRequestMethod("GET");
+                connection.setConnectTimeout(10000);
+                connection.setReadTimeout(10000);
 
-        // Read the response
-        BufferedReader in = new BufferedReader(new InputStreamReader(connection.getInputStream()));
-        String inputLine;
-        StringBuilder response = new StringBuilder();
+                // Add a small delay to avoid hitting the rate limit
+                Thread.sleep(100); // 100ms delay between requests
 
-        while ((inputLine = in.readLine()) != null) {
-            response.append(inputLine);
+                int responseCode = connection.getResponseCode();
+                System.out.println("Response code: " + responseCode);
+                if (responseCode == 429) { // Rate limit hit
+                    System.out.println("Rate limit hit. Retrying in 2 seconds...");
+                    Thread.sleep(2000);
+                    attempts++;
+                    continue;
+                } else if (responseCode != 200) {
+                    throw new IOException("Failed request: HTTP " + responseCode);
+                }
+
+                BufferedReader in = new BufferedReader(new InputStreamReader(connection.getInputStream()));
+                StringBuilder response = new StringBuilder();
+                String inputLine;
+                while ((inputLine = in.readLine()) != null) {
+                    response.append(inputLine);
+                }
+                in.close();
+
+                return response.toString();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IOException("Interrupted during retry", e);
+            }
         }
-        in.close();
-
-        return response.toString();
+        throw new IOException("Failed to fetch after multiple attempts.");
     }
 
-    // Method to download an image from a URL
+    private static void submitDownloadTask(ExecutorService executor, Set<String> downloadedImages, String imageUrl) {
+        synchronized (downloadedImages) {
+            if (!downloadedImages.contains(imageUrl)) {
+                downloadedImages.add(imageUrl);
+                executor.execute(() -> downloadImage(imageUrl));
+            }
+        }
+    }
+
     private static void downloadImage(String imageUrl) {
         try {
-            // Open connection to image URL
             URL url = new URL(imageUrl);
             HttpURLConnection connection = (HttpURLConnection) url.openConnection();
             connection.setRequestMethod("GET");
-            connection.setConnectTimeout(5000);
-            connection.setReadTimeout(5000);
+            connection.setConnectTimeout(10000);
+            connection.setReadTimeout(10000);
 
-            // Get the file name from the URL (last part of the URL)
+            // Sanitize file name (remove query parameters and special chars)
             String[] urlParts = imageUrl.split("/");
-            String fileName = urlParts[urlParts.length - 1];
+            String fileName = urlParts[urlParts.length - 1].split("\\?")[0].replaceAll("[^a-zA-Z0-9.-]", "_");
 
-            // Create output file stream
             File outputFile = new File(IMAGE_DIR + fileName);
-            InputStream in = connection.getInputStream();
-            FileOutputStream out = new FileOutputStream(outputFile);
+            try (InputStream in = connection.getInputStream();
+                    FileOutputStream out = new FileOutputStream(outputFile)) {
 
-            // Read and write the image data
-            byte[] buffer = new byte[4096];
-            int bytesRead;
-            while ((bytesRead = in.read(buffer)) != -1) {
-                out.write(buffer, 0, bytesRead);
+                byte[] buffer = new byte[4096];
+                int bytesRead;
+                while ((bytesRead = in.read(buffer)) != -1) {
+                    out.write(buffer, 0, bytesRead);
+                }
+
+                System.out.println("Downloaded: " + fileName);
             }
-
-            // Close streams
-            in.close();
-            out.close();
-            System.out.println("Downloaded: " + fileName);
         } catch (IOException e) {
             System.err.println("Failed to download image: " + imageUrl);
             e.printStackTrace();

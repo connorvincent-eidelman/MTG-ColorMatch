@@ -5,6 +5,8 @@ import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.List;
 
 import com.google.gson.Gson;
 
@@ -12,8 +14,8 @@ import javafx.application.Application;
 import javafx.scene.Scene;
 import javafx.scene.control.Button;
 import javafx.scene.control.Label;
-import javafx.scene.control.Slider;
 import javafx.scene.control.TextArea;
+import javafx.scene.control.TextField;
 import javafx.scene.layout.VBox;
 import javafx.stage.Stage;
 
@@ -33,19 +35,16 @@ public class ColorHistogramQueryUI extends Application {
         Label blueLabel = new Label("Blue:");
         Label toleranceLabel = new Label("Tolerance:");
 
-        // Sliders for RGB values
-        Slider redSlider = createColorSlider();
-        Slider greenSlider = createColorSlider();
-        Slider blueSlider = createColorSlider();
+        // Text fields for RGB values
+        TextField redTextField = createColorTextField();
+        TextField greenTextField = createColorTextField();
+        TextField blueTextField = createColorTextField();
 
-        // Slider for tolerance
-        Slider toleranceSlider = new Slider(0, 255, 10);
-        toleranceSlider.setBlockIncrement(1);
+        // Text field for tolerance
+        TextField toleranceTextField = createColorTextField();
 
-        // Label to display tolerance value
-        Label toleranceValueLabel = new Label(String.format("%.0f", toleranceSlider.getValue()));
-        toleranceSlider.valueProperty().addListener(
-                (observable, oldValue, newValue) -> toleranceValueLabel.setText(String.format("%.0f", newValue)));
+        // Label to display tolerance value (for user reference)
+        Label toleranceValueLabel = new Label("Tolerance (0-255):");
 
         // Button to trigger the search
         Button searchButton = new Button("Find Closest Images");
@@ -59,19 +58,26 @@ public class ColorHistogramQueryUI extends Application {
         VBox root = new VBox(10);
         root.setPadding(new javafx.geometry.Insets(20));
 
-        root.getChildren().addAll(redLabel, redSlider,
-                greenLabel, greenSlider,
-                blueLabel, blueSlider,
-                toleranceLabel, toleranceSlider, toleranceValueLabel,
+        root.getChildren().addAll(redLabel, redTextField,
+                greenLabel, greenTextField,
+                blueLabel, blueTextField,
+                toleranceLabel, toleranceTextField, toleranceValueLabel,
                 searchButton,
                 resultTextArea);
 
         // Action for Search Button
         searchButton.setOnAction(event -> {
-            int red = (int) redSlider.getValue();
-            int green = (int) greenSlider.getValue();
-            int blue = (int) blueSlider.getValue();
-            int tolerance = (int) toleranceSlider.getValue();
+            // Get RGB values from the text fields
+            int red = parseColorInput(redTextField.getText());
+            int green = parseColorInput(greenTextField.getText());
+            int blue = parseColorInput(blueTextField.getText());
+            int tolerance = parseColorInput(toleranceTextField.getText());
+
+            // Ensure valid inputs
+            if (red == -1 || green == -1 || blue == -1 || tolerance == -1) {
+                resultTextArea.setText("Please enter valid RGB values (0-255) and tolerance.");
+                return;
+            }
 
             // Find closest images from database
             String result = findClosestImages(red, green, blue, tolerance);
@@ -85,14 +91,23 @@ public class ColorHistogramQueryUI extends Application {
         primaryStage.show();
     }
 
-    private Slider createColorSlider() {
-        Slider slider = new Slider(0, 255, 128);
-        slider.setBlockIncrement(1);
-        slider.setMajorTickUnit(50);
-        slider.setMinorTickCount(5);
-        slider.setShowTickLabels(true);
-        slider.setShowTickMarks(true);
-        return slider;
+    private TextField createColorTextField() {
+        TextField textField = new TextField();
+        textField.setPromptText("0-255");
+        return textField;
+    }
+
+    // Method to parse the RGB values from text input
+    private int parseColorInput(String input) {
+        try {
+            int value = Integer.parseInt(input);
+            if (value < 0 || value > 255) {
+                return -1; // Invalid value
+            }
+            return value;
+        } catch (NumberFormatException e) {
+            return -1; // Invalid input (not a number)
+        }
     }
 
     // Method to query the database and find the closest images
@@ -107,6 +122,9 @@ public class ColorHistogramQueryUI extends Application {
             try (PreparedStatement stmt = connection.prepareStatement(querySQL)) {
                 ResultSet resultSet = stmt.executeQuery();
 
+                // List to store filenames and their scores
+                List<ImageMatch> matches = new ArrayList<>();
+
                 while (resultSet.next()) {
                     String filename = resultSet.getString("filename");
                     String redHistogramJson = resultSet.getString("red_histogram");
@@ -117,33 +135,72 @@ public class ColorHistogramQueryUI extends Application {
                     int[] greenHistogram = gson.fromJson(greenHistogramJson, int[].class);
                     int[] blueHistogram = gson.fromJson(blueHistogramJson, int[].class);
 
-                    if (isColorMatch(red, green, blue, tolerance, redHistogram, greenHistogram, blueHistogram)) {
-                        result.append("Filename: ").append(filename).append("\n");
+                    // Calculate match score
+                    int matchScore = calculateMatchScore(red, green, blue, tolerance, redHistogram, greenHistogram,
+                            blueHistogram);
+
+                    if (matchScore > 0) {
+                        matches.add(new ImageMatch(filename, matchScore));
                     }
                 }
+
+                // Sort matches by score (descending)
+                matches.sort((a, b) -> Integer.compare(b.getScore(), a.getScore()));
+
+                // Build result string from sorted matches
+                for (ImageMatch match : matches) {
+                    result.append("Filename: ").append(match.getFilename())
+                            .append(" | Match Score: ").append(match.getScore())
+                            .append("\n");
+                }
+
+                // If no matches are found
+                if (matches.isEmpty()) {
+                    result.append("No matches found within the tolerance range.");
+                }
+
             }
         } catch (SQLException e) {
             e.printStackTrace();
+            result.append("Error querying the database.");
         }
         return result.toString();
     }
 
-    // Method to check if the color histogram is within tolerance range
-    private boolean isColorMatch(int red, int green, int blue, int tolerance,
+    // Method to calculate the match score based on the histograms
+    private int calculateMatchScore(int red, int green, int blue, int tolerance,
             int[] redHistogram, int[] greenHistogram, int[] blueHistogram) {
-        // Check if the color histogram has a significant amount of pixels in the
-        // tolerance range
-        int matchCount = 0;
+        int matchScore = 0;
+
+        // Loop through the histogram bins
         for (int i = 0; i < 256; i++) {
             if (Math.abs(i - red) <= tolerance && redHistogram[i] > 0)
-                matchCount++;
+                matchScore += redHistogram[i];
             if (Math.abs(i - green) <= tolerance && greenHistogram[i] > 0)
-                matchCount++;
+                matchScore += greenHistogram[i];
             if (Math.abs(i - blue) <= tolerance && blueHistogram[i] > 0)
-                matchCount++;
+                matchScore += blueHistogram[i];
         }
 
-        // If the match count exceeds a certain threshold, consider it a match
-        return matchCount > 100; // Arbitrary threshold, can be adjusted
+        return matchScore;
+    }
+
+    // ImageMatch class to store filename and score
+    public static class ImageMatch {
+        private String filename;
+        private int score;
+
+        public ImageMatch(String filename, int score) {
+            this.filename = filename;
+            this.score = score;
+        }
+
+        public String getFilename() {
+            return filename;
+        }
+
+        public int getScore() {
+            return score;
+        }
     }
 }
