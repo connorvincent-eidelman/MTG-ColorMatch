@@ -5,6 +5,7 @@ module org.example.colorhistogramreal {
     requires java.net.http;
     requires java.sql;
     requires transitive javafx.graphics;
+    requires org.json;
 
     requires com.google.gson;
 

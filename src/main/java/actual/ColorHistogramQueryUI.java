@@ -7,12 +7,16 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 import com.google.gson.Gson;
 
 import javafx.application.Application;
 import javafx.scene.Scene;
 import javafx.scene.control.Button;
+import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.TextArea;
 import javafx.scene.control.TextField;
@@ -22,6 +26,8 @@ import javafx.stage.Stage;
 public class ColorHistogramQueryUI extends Application {
 
     private static final String DB_URL = "jdbc:sqlite:ColorHistogram.db";
+    private List<String> extractedCardIds = new ArrayList<>();
+
 
     public static void main(String[] args) {
         launch(args);
@@ -34,6 +40,7 @@ public class ColorHistogramQueryUI extends Application {
         Label greenLabel = new Label("Green:");
         Label blueLabel = new Label("Blue:");
         Label toleranceLabel = new Label("Tolerance:");
+        Label rangeLabel = new Label("Tolerance Range:");
 
         // Text fields for RGB values
         TextField redTextField = createColorTextField();
@@ -43,8 +50,10 @@ public class ColorHistogramQueryUI extends Application {
         // Text field for tolerance
         TextField toleranceTextField = createColorTextField();
 
-        // Label to display tolerance value (for user reference)
-        Label toleranceValueLabel = new Label("Tolerance (0-255):");
+        // ComboBox for selecting tolerance range
+        ComboBox<String> rangeComboBox = new ComboBox<>();
+        rangeComboBox.getItems().addAll("Downward Range", "Upward Range", "Both Ranges");
+        rangeComboBox.setValue("Both Ranges"); // Default value
 
         // Button to trigger the search
         Button searchButton = new Button("Find Closest Images");
@@ -61,7 +70,8 @@ public class ColorHistogramQueryUI extends Application {
         root.getChildren().addAll(redLabel, redTextField,
                 greenLabel, greenTextField,
                 blueLabel, blueTextField,
-                toleranceLabel, toleranceTextField, toleranceValueLabel,
+                toleranceLabel, toleranceTextField,
+                rangeLabel, rangeComboBox,
                 searchButton,
                 resultTextArea);
 
@@ -79,8 +89,11 @@ public class ColorHistogramQueryUI extends Application {
                 return;
             }
 
-            // Find closest images from database
-            String result = findClosestImages(red, green, blue, tolerance);
+            // Get the selected range type
+            String rangeType = rangeComboBox.getValue();
+
+            // Find closest images from the database
+            String result = findClosestImages(red, green, blue, tolerance, rangeType);
             resultTextArea.setText(result);
         });
 
@@ -97,7 +110,6 @@ public class ColorHistogramQueryUI extends Application {
         return textField;
     }
 
-    // Method to parse the RGB values from text input
     private int parseColorInput(String input) {
         try {
             int value = Integer.parseInt(input);
@@ -109,9 +121,38 @@ public class ColorHistogramQueryUI extends Application {
             return -1; // Invalid input (not a number)
         }
     }
+     public void scanForCards() {
+        extractedCardIds.clear(); // Reset list
+        try (Connection connection = DriverManager.getConnection(DB_URL)) {
+            String querySQL = "SELECT filename FROM ColorHistogram;";
+            try (PreparedStatement stmt = connection.prepareStatement(querySQL)) {
+                ResultSet resultSet = stmt.executeQuery();
+                while (resultSet.next()) {
+                    String filename = resultSet.getString("filename");
+                    String cardId = extractCardIdFromFilename(filename);
+                    if (cardId != null) {
+                        extractedCardIds.add(cardId);
+                    }
+                }
+            }
+        } catch (SQLException e) {
+            e.printStackTrace();
+        }
+    }
 
-    // Method to query the database and find the closest images
-    private String findClosestImages(int red, int green, int blue, int tolerance) {
+    // Returns extracted card IDs
+    public List<String> getExtractedCardIds() {
+        return extractedCardIds;
+    }
+
+    // Extracts a card ID from a filename (assumes format "12345.jpg")
+    private String extractCardIdFromFilename(String filename) {
+        Pattern pattern = Pattern.compile("(\\d+)\\.\\w+$");
+        Matcher matcher = pattern.matcher(filename);
+        return matcher.find() ? matcher.group(1) : null;
+    }
+
+    private String findClosestImages(int red, int green, int blue, int tolerance, String rangeType) {
         StringBuilder result = new StringBuilder();
         try (Connection connection = DriverManager.getConnection(DB_URL)) {
             Gson gson = new Gson();
@@ -136,8 +177,8 @@ public class ColorHistogramQueryUI extends Application {
                     int[] blueHistogram = gson.fromJson(blueHistogramJson, int[].class);
 
                     // Calculate match score
-                    int matchScore = calculateMatchScore(red, green, blue, tolerance, redHistogram, greenHistogram,
-                            blueHistogram);
+                    int matchScore = calculateMatchScore(red, green, blue, tolerance, rangeType, redHistogram,
+                            greenHistogram, blueHistogram);
 
                     if (matchScore > 0) {
                         matches.add(new ImageMatch(filename, matchScore));
@@ -146,16 +187,16 @@ public class ColorHistogramQueryUI extends Application {
 
                 // Sort matches by score (descending)
                 matches.sort((a, b) -> Integer.compare(b.getScore(), a.getScore()));
-
+                List<ImageMatch> topMatches = matches.stream().limit(100).collect(Collectors.toList());
+                
                 // Build result string from sorted matches
-                for (ImageMatch match : matches) {
+                for (ImageMatch match : topMatches) {
                     result.append("Filename: ").append(match.getFilename())
                             .append(" | Match Score: ").append(match.getScore())
                             .append("\n");
                 }
 
-                // If no matches are found
-                if (matches.isEmpty()) {
+                if (topMatches.isEmpty()) {
                     result.append("No matches found within the tolerance range.");
                 }
 
@@ -167,25 +208,47 @@ public class ColorHistogramQueryUI extends Application {
         return result.toString();
     }
 
-    // Method to calculate the match score based on the histograms
-    private int calculateMatchScore(int red, int green, int blue, int tolerance,
+    private int calculateMatchScore(int red, int green, int blue, int tolerance, String rangeType,
             int[] redHistogram, int[] greenHistogram, int[] blueHistogram) {
         int matchScore = 0;
 
-        // Loop through the histogram bins
         for (int i = 0; i < 256; i++) {
-            if (Math.abs(i - red) <= tolerance && redHistogram[i] > 0)
+            boolean isMatchRed = false, isMatchGreen = false, isMatchBlue = false;
+
+            if ("Downward Range".equals(rangeType)) {
+                if (i >= red - tolerance && i <= red && redHistogram[i] > 0)
+                    isMatchRed = true;
+                if (i >= green - tolerance && i <= green && greenHistogram[i] > 0)
+                    isMatchGreen = true;
+                if (i >= blue - tolerance && i <= blue && blueHistogram[i] > 0)
+                    isMatchBlue = true;
+            } else if ("Upward Range".equals(rangeType)) {
+                if (i >= red && i <= red + tolerance && redHistogram[i] > 0)
+                    isMatchRed = true;
+                if (i >= green && i <= green + tolerance && greenHistogram[i] > 0)
+                    isMatchGreen = true;
+                if (i >= blue && i <= blue + tolerance && blueHistogram[i] > 0)
+                    isMatchBlue = true;
+            } else { // Both Ranges
+                if (i >= red - tolerance && i <= red + tolerance && redHistogram[i] > 0)
+                    isMatchRed = true;
+                if (i >= green - tolerance && i <= green + tolerance && greenHistogram[i] > 0)
+                    isMatchGreen = true;
+                if (i >= blue - tolerance && i <= blue + tolerance && blueHistogram[i] > 0)
+                    isMatchBlue = true;
+            }
+
+            if (isMatchRed)
                 matchScore += redHistogram[i];
-            if (Math.abs(i - green) <= tolerance && greenHistogram[i] > 0)
+            if (isMatchGreen)
                 matchScore += greenHistogram[i];
-            if (Math.abs(i - blue) <= tolerance && blueHistogram[i] > 0)
+            if (isMatchBlue)
                 matchScore += blueHistogram[i];
         }
 
         return matchScore;
     }
 
-    // ImageMatch class to store filename and score
     public static class ImageMatch {
         private String filename;
         private int score;
@@ -204,3 +267,4 @@ public class ColorHistogramQueryUI extends Application {
         }
     }
 }
+
