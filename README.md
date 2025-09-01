@@ -14,7 +14,7 @@ MTG-ColorMatch is a Java application for analyzing, storing, and visualizing col
 ## Project Structure
 
 - `src/main/java/actual/`: Core logic, database, image processing, and Swing UI.
-- `src/main/java/org/example/MTG-ColorMatch/`: JavaFX UI and Scryfall API utilities.
+- `src/main/java/org/example/colorhistogramreal/`: JavaFX UI and Scryfall API utilities.
 - `src/main/resources/`: FXML files for JavaFX UI.
 - `card_images/`: Folder for downloaded card images.
 - `ColorHistogram.db`: SQLite database file.
@@ -47,9 +47,9 @@ MTG-ColorMatch is a Java application for analyzing, storing, and visualizing col
 
 4. **Run Swing utilities**
    ```sh
-   java -m org.example.MTG-ColorMatch/actual.ColorHistogramDatabase
-   java -m org.example.MTG-ColorMatch/actual.ScryfallCardArtDownloader
-   java -m org.example.MTG-ColorMatch/actual.ColorHistogramImageViewer
+   java -m org.example.colorhistogramreal/actual.ColorHistogramDatabase
+   java -m org.example.colorhistogramreal/actual.ScryfallCardArtDownloader
+   java -m org.example.colorhistogramreal/actual.ColorHistogramImageViewer
    ```
 
 ## Usage
