@@ -1,6 +1,6 @@
-# ColorHistogramReal
+# MTG-ColorMatch
 
-ColorHistogramReal is a Java application for analyzing, storing, and visualizing color histograms of Magic: The Gathering card images. It supports downloading card art from Scryfall, calculating RGB histograms, storing results in a SQLite database, and searching for images by color similarity. The project includes both JavaFX and Swing user interfaces.
+MTG-ColorMatch is a Java application for analyzing, storing, and visualizing color histograms of Magic: The Gathering card images. It supports downloading card art from Scryfall, calculating RGB histograms, storing results in a SQLite database, and searching for images by color similarity. The project includes both JavaFX and Swing user interfaces.
 
 ## Features
 
@@ -14,7 +14,7 @@ ColorHistogramReal is a Java application for analyzing, storing, and visualizing
 ## Project Structure
 
 - `src/main/java/actual/`: Core logic, database, image processing, and Swing UI.
-- `src/main/java/org/example/colorhistogramreal/`: JavaFX UI and Scryfall API utilities.
+- `src/main/java/org/example/MTG-ColorMatch/`: JavaFX UI and Scryfall API utilities.
 - `src/main/resources/`: FXML files for JavaFX UI.
 - `card_images/`: Folder for downloaded card images.
 - `ColorHistogram.db`: SQLite database file.
@@ -32,7 +32,7 @@ ColorHistogramReal is a Java application for analyzing, storing, and visualizing
 1. **Clone the repository**
    ```sh
    git clone <repo-url>
-   cd colorhistogramreal
+   cd MTG-ColorMatch
    ```
 
 2. **Download dependencies and build**
@@ -47,9 +47,9 @@ ColorHistogramReal is a Java application for analyzing, storing, and visualizing
 
 4. **Run Swing utilities**
    ```sh
-   java -m org.example.colorhistogramreal/actual.ColorHistogramDatabase
-   java -m org.example.colorhistogramreal/actual.ScryfallCardArtDownloader
-   java -m org.example.colorhistogramreal/actual.ColorHistogramImageViewer
+   java -m org.example.MTG-ColorMatch/actual.ColorHistogramDatabase
+   java -m org.example.MTG-ColorMatch/actual.ScryfallCardArtDownloader
+   java -m org.example.MTG-ColorMatch/actual.ColorHistogramImageViewer
    ```
 
 ## Usage
